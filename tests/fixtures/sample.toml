@@ -1,0 +1,15 @@
+[alpha]
+web = 3010
+api = 3011
+
+[beta]
+web = 3020
+api = 3021
+ws  = 3022
+
+[gamma]
+http = 3030
+
+# A deliberate collision for doctor tests
+[duplicate]
+web = 3010

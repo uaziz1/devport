@@ -1,0 +1,18 @@
+# Example dev port registry.
+# Copy to ~/.config/dev-ports.toml and edit.
+#
+# Convention: 10-port block per project (room for web/api/ws/worker/db).
+# Use `devport free` to find the next unused block.
+# Use `devport doctor` to audit for collisions and currently-bound ports.
+
+[my-app]
+web = 3010
+api = 3011
+
+[my-other-app]
+web = 3020
+api = 3021
+ws  = 3022
+
+[some-service]
+http = 3030

@@ -1,0 +1,15 @@
+# Spec for the `pre-commit` framework (https://pre-commit.com).
+# Drop into your project's .pre-commit-config.yaml to enable the devport check.
+#
+# repos:
+#   - repo: https://github.com/uaziz1/devport
+#     rev: v0.1.0
+#     hooks:
+#       - id: devport-no-hardcoded-ports
+
+- id: devport-no-hardcoded-ports
+  name: devport — no hardcoded local ports
+  entry: bash examples/pre-commit-hook.sh
+  language: system
+  types: [text]
+  pass_filenames: false

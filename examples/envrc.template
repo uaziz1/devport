@@ -1,0 +1,4 @@
+# Drop this in a project root, rename to `.envrc`, then `direnv allow`.
+# Replace <PROJECT> with the registry key in ~/.config/dev-ports.toml.
+
+eval "$(devport env <PROJECT>)"
