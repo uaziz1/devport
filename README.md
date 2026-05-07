@@ -72,39 +72,54 @@ touch ~/.config/dev-ports.toml
 
 ## Quickstart
 
-After the installer runs, add ports straight from the CLI — no editor needed:
-
-```bash
-devport add my-app web        # → 3010   (auto-allocates a free block)
-devport add my-app api        # → 3011   (next slot in the same block)
-devport add my-app worker 4000   # → 4000   (explicit port)
-```
-
-Read, audit, change, and remove:
-
-```bash
-devport my-app web                    # → 3010
-devport list my-app                   # show the project's ports
-devport doctor                        # audit collisions + currently-bound
-devport rename my-app web frontend    # web → frontend (port number stays)
-devport rm my-app worker              # remove one port
-devport rm my-app                     # remove the whole project
-```
-
-`add`, `rename`, and `rm` mutate the TOML surgically — comments, blank lines, and inline `# notes` are preserved. Safe for both humans and AI agents to drive.
-
-For per-project wiring (so `package.json`, `docker-compose.yml`, etc. read from the registry), one command:
-
 ```bash
 cd ~/Dev/my-app
-devport init               # writes .envrc, runs `direnv allow`
+devport init
 ```
 
-`init` uses the cwd's basename as the project name (override with `devport init <name>`). Idempotent — running twice doesn't duplicate the line.
+That's it. `devport init`:
 
-Now `$WEB_PORT` and `$API_PORT` are exported automatically whenever you `cd` in. Replace `3000` literals with `$WEB_PORT` in your code and you're done.
+1. Registers the project (uses the cwd basename as the name)
+2. Allocates a free port and adds it as `web`
+3. Writes `.envrc` with the loader
+4. Runs `direnv allow`
 
-Requires [direnv](docs/direnv.md) — `init` will tell you if it's missing.
+In a new shell entering this directory, `$WEB_PORT` is now exported. Replace `3000` literals in your `package.json`, `docker-compose.yml`, etc. with `$WEB_PORT` and you're done.
+
+```bash
+echo $WEB_PORT     # → 3010
+```
+
+That's the entire happy path. Everything below is for when you need more.
+
+### Adding more ports
+
+```bash
+devport add my-app api               # → 3011 (next slot in same block)
+devport add my-app worker 4000       # → 4000 (explicit)
+```
+
+After adding, run `direnv reload` (or `cd` out and back) and `$API_PORT` / `$WORKER_PORT` are exported.
+
+### Inspecting and changing
+
+```bash
+devport list                          # show registry
+devport doctor                        # audit collisions + what's bound
+devport rename my-app web frontend    # rename within a project
+devport rm my-app worker              # remove a port
+devport rm my-app                     # remove a whole project
+```
+
+### Migrating an existing project
+
+```bash
+devport adopt ~/Dev/my-app            # find hardcoded ports
+```
+
+All write operations are surgical (line-level), so comments, blank lines, and inline `# notes` in the registry survive.
+
+Requires [direnv](docs/direnv.md) — `init` will tell you if it's missing and how to install it.
 
 ## Commands
 

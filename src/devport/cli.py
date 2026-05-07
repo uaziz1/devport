@@ -116,7 +116,8 @@ def _allocate_port(data: dict[str, dict[str, int]], project: str) -> int:
     sys.exit("devport: no free 10-port block in 3000-3099")
 
 
-def cmd_add(project: str, name: str, port_str: str | None) -> None:
+def _add_port(project: str, name: str, port: int | None = None) -> int:
+    """Add a port to the registry. Returns the resulting port. Exits on conflict."""
     data: dict[str, dict[str, int]] = {}
     path = registry_path()
     if path.exists():
@@ -126,13 +127,9 @@ def cmd_add(project: str, name: str, port_str: str | None) -> None:
     if project in data and name in data[project]:
         sys.exit(f"devport: {project}.{name} already exists ({data[project][name]})")
 
-    if port_str is None:
+    if port is None:
         port = _allocate_port(data, project)
     else:
-        try:
-            port = int(port_str)
-        except ValueError:
-            sys.exit(f"devport: '{port_str}' is not a port number")
         for proj, ports in data.items():
             for n, p in ports.items():
                 if p == port:
@@ -154,7 +151,17 @@ def cmd_add(project: str, name: str, port_str: str | None) -> None:
         lines.append(f"[{project}]\n")
         lines.append(new_line)
     _write_lines(path, lines)
-    print(port)
+    return port
+
+
+def cmd_add(project: str, name: str, port_str: str | None) -> None:
+    port: int | None = None
+    if port_str is not None:
+        try:
+            port = int(port_str)
+        except ValueError:
+            sys.exit(f"devport: '{port_str}' is not a port number")
+    print(_add_port(project, name, port))
 
 
 def cmd_rm(project: str, name: str | None) -> None:
@@ -205,7 +212,7 @@ def cmd_rename(project: str, old: str, new: str) -> None:
 
 
 def cmd_init(project: str | None) -> None:
-    """Wire the current directory up to a project: write .envrc, run direnv allow."""
+    """One-shot per-project setup: register the project, write .envrc, direnv allow."""
     cwd = Path.cwd()
     proj = project or cwd.name
     if not re.match(r"^[a-zA-Z0-9._-]+$", proj):
@@ -214,14 +221,19 @@ def cmd_init(project: str | None) -> None:
             "pass one explicitly: devport init <project>"
         )
 
-    # Heads-up if the registry doesn't know this project yet (still proceed).
     path = registry_path()
+    data: dict[str, dict[str, int]] = {}
     if path.exists():
         with path.open("rb") as f:
             data = tomllib.load(f)
-        if proj not in data:
-            print(f"  ⚠ project '{proj}' not in registry yet")
-            print(f"    add ports with: devport add {proj} web")
+
+    # New (or empty) project? Seed it with a 'web' port so the .envrc has something to export.
+    if proj not in data or not data[proj]:
+        port = _add_port(proj, "web")
+        print(f"  ✓ added {proj}.web = {port}")
+    else:
+        existing = ", ".join(f"{n}={p}" for n, p in data[proj].items())
+        print(f"  ✓ project '{proj}' already in registry ({existing})")
 
     envrc = cwd / ".envrc"
     line = f'eval "$(devport env {proj})"'

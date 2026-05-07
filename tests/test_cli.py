@@ -240,17 +240,33 @@ def test_init_appends_to_existing_envrc(clean_registry, tmp_path, monkeypatch):
     assert 'eval "$(devport env alpha)"' in text
 
 
-def test_init_warns_if_project_not_in_registry(clean_registry, tmp_path, capsys, monkeypatch):
+def test_init_auto_adds_web_port_for_new_project(clean_registry, tmp_path, capsys, monkeypatch):
     project_dir = tmp_path / "newproj"
     project_dir.mkdir()
     monkeypatch.chdir(project_dir)
     monkeypatch.setattr(cli.shutil, "which", lambda _: None)
     cli.main(["init"])
     out = capsys.readouterr().out
-    assert "not in registry" in out
-    assert "devport add newproj web" in out
-    # .envrc still gets written
+    assert "added newproj.web" in out
+    # registry now has newproj with a web port
+    text = clean_registry.read_text()
+    assert "[newproj]" in text and "web =" in text
+    # .envrc written
     assert (project_dir / ".envrc").exists()
+
+
+def test_init_existing_project_does_not_add_port(clean_registry, tmp_path, capsys, monkeypatch):
+    project_dir = tmp_path / "alpha"  # already has web=3010, api=3011
+    project_dir.mkdir()
+    monkeypatch.chdir(project_dir)
+    monkeypatch.setattr(cli.shutil, "which", lambda _: None)
+    before = clean_registry.read_text()
+    cli.main(["init"])
+    out = capsys.readouterr().out
+    assert "already in registry" in out
+    assert "web=3010" in out
+    # registry contents unchanged
+    assert clean_registry.read_text() == before
 
 
 def test_init_rejects_invalid_name(clean_registry, tmp_path, monkeypatch):
