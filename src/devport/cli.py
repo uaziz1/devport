@@ -204,6 +204,50 @@ def cmd_rename(project: str, old: str, new: str) -> None:
     print(f"renamed: {project}.{old} -> {project}.{new}")
 
 
+def cmd_init(project: str | None) -> None:
+    """Wire the current directory up to a project: write .envrc, run direnv allow."""
+    cwd = Path.cwd()
+    proj = project or cwd.name
+    if not re.match(r"^[a-zA-Z0-9._-]+$", proj):
+        sys.exit(
+            f"devport: '{proj}' is not a valid project name; "
+            "pass one explicitly: devport init <project>"
+        )
+
+    # Heads-up if the registry doesn't know this project yet (still proceed).
+    path = registry_path()
+    if path.exists():
+        with path.open("rb") as f:
+            data = tomllib.load(f)
+        if proj not in data:
+            print(f"  ⚠ project '{proj}' not in registry yet")
+            print(f"    add ports with: devport add {proj} web")
+
+    envrc = cwd / ".envrc"
+    line = f'eval "$(devport env {proj})"'
+    if envrc.exists():
+        text = envrc.read_text()
+        if line in text:
+            print(f"  .envrc already wired for '{proj}' (no change)")
+        else:
+            envrc.write_text(text.rstrip("\n") + "\n" + line + "\n")
+            print(f"  appended devport line to {envrc}")
+    else:
+        envrc.write_text(line + "\n")
+        print(f"  wrote {envrc}")
+
+    if shutil.which("direnv"):
+        try:
+            subprocess.run(["direnv", "allow", str(cwd)], check=False, capture_output=True)
+            print("  direnv allow ✓")
+        except OSError:
+            print("  direnv allow failed — run it manually")
+    else:
+        print("  ⚠ direnv not installed — .envrc won't auto-load")
+        print("    install: brew install direnv")
+        print("    then add to your shell rc: eval \"$(direnv hook bash)\"")
+
+
 def cmd_get(project: str, name: str) -> None:
     data = load()
     if project not in data:
@@ -399,6 +443,7 @@ write:
   devport add <project> <name> [port]   add a port (auto-allocates if no port given)
   devport rm <project> [name]           remove a port (or whole project if no name)
   devport rename <project> <old> <new>  rename a port within a project
+  devport init [project]                wire current dir to a project (.envrc + direnv allow)
 
 audit:
   devport doctor                    collisions + currently-bound ports
@@ -451,6 +496,10 @@ def main(argv: list[str] | None = None) -> None:
         if len(args) != 4:
             sys.exit("usage: devport rename <project> <old> <new>")
         cmd_rename(args[1], args[2], args[3])
+    elif cmd == "init":
+        if len(args) > 2:
+            sys.exit("usage: devport init [project]")
+        cmd_init(args[1] if len(args) == 2 else None)
     elif len(args) == 2:
         cmd_get(args[0], args[1])
     else:

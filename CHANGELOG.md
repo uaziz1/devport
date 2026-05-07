@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `devport add <project> <name> [port]` — add a port. Auto-allocates in the project's existing 10-block, or claims a fresh block. Prints the port.
 - `devport rm <project> [name]` — remove a port, or a whole project block if no name given.
 - `devport rename <project> <old> <new>` — rename a port within a project. Port number unchanged.
+- `devport init [project]` — wire the current directory to a project in one shot: writes `.envrc` (or appends to an existing one), runs `direnv allow`. Defaults to the cwd basename. Idempotent.
 - All write ops are surgical (line-level), so comments, blank lines, and inline `# notes` survive.
 - `devport <project> <name>` — resolve a port from the registry.
 - `devport list [project]` — show registry contents.

@@ -21,14 +21,19 @@ cd ~/Dev/my-app
 devport add my-app web
 devport add my-app api
 
-cat > .envrc <<'EOF'
-eval "$(devport env my-app)"
-EOF
-
-direnv allow
+# wire up .envrc + run `direnv allow` in one shot
+devport init my-app
 ```
 
 That's it. Now `echo $WEB_PORT` returns the registered port whenever you're in that directory.
+
+`devport init` defaults the project name to the cwd basename, so if your folder is named `my-app`, you can drop the argument:
+
+```bash
+devport init
+```
+
+It's idempotent — running twice won't duplicate the `eval` line — and merges into an existing `.envrc` rather than overwriting it.
 
 ## Wiring it into the code
 

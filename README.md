@@ -93,15 +93,18 @@ devport rm my-app                     # remove the whole project
 
 `add`, `rename`, and `rm` mutate the TOML surgically — comments, blank lines, and inline `# notes` are preserved. Safe for both humans and AI agents to drive.
 
-For per-project wiring (so `package.json`, `docker-compose.yml`, etc. read from the registry), the cleanest path is **[direnv](docs/direnv.md)**:
+For per-project wiring (so `package.json`, `docker-compose.yml`, etc. read from the registry), one command:
 
 ```bash
 cd ~/Dev/my-app
-echo 'eval "$(devport env my-app)"' > .envrc
-direnv allow
+devport init               # writes .envrc, runs `direnv allow`
 ```
 
+`init` uses the cwd's basename as the project name (override with `devport init <name>`). Idempotent — running twice doesn't duplicate the line.
+
 Now `$WEB_PORT` and `$API_PORT` are exported automatically whenever you `cd` in. Replace `3000` literals with `$WEB_PORT` in your code and you're done.
+
+Requires [direnv](docs/direnv.md) — `init` will tell you if it's missing.
 
 ## Commands
 
@@ -122,6 +125,7 @@ Now `$WEB_PORT` and `$API_PORT` are exported automatically whenever you `cd` in.
 | `devport add <project> <name> [port]`        | Add a port. Auto-allocates if no port given. Prints the port. |
 | `devport rm <project> [name]`                | Remove a port (or the whole project if no name) |
 | `devport rename <project> <old> <new>`       | Rename a port within a project |
+| `devport init [project]`                     | Wire current dir to a project: write `.envrc` + `direnv allow` |
 
 **Audit:**
 

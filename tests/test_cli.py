@@ -196,6 +196,72 @@ def test_rename_rejects_existing_name(clean_registry):
     assert "already exists" in str(exc.value)
 
 
+def test_init_writes_envrc_with_explicit_name(clean_registry, tmp_path, capsys, monkeypatch):
+    project_dir = tmp_path / "myproj"
+    project_dir.mkdir()
+    monkeypatch.chdir(project_dir)
+    monkeypatch.setattr(cli.shutil, "which", lambda _: None)
+    cli.main(["init", "alpha"])
+    envrc = project_dir / ".envrc"
+    assert envrc.exists()
+    assert 'eval "$(devport env alpha)"' in envrc.read_text()
+
+
+def test_init_uses_cwd_basename_when_no_arg(clean_registry, tmp_path, monkeypatch):
+    project_dir = tmp_path / "alpha"  # match an existing project
+    project_dir.mkdir()
+    monkeypatch.chdir(project_dir)
+    monkeypatch.setattr(cli.shutil, "which", lambda _: None)
+    cli.main(["init"])
+    assert 'eval "$(devport env alpha)"' in (project_dir / ".envrc").read_text()
+
+
+def test_init_idempotent(clean_registry, tmp_path, capsys, monkeypatch):
+    project_dir = tmp_path / "alpha"
+    project_dir.mkdir()
+    monkeypatch.chdir(project_dir)
+    monkeypatch.setattr(cli.shutil, "which", lambda _: None)
+    cli.main(["init"])
+    cli.main(["init"])  # second run should not duplicate the eval line
+    text = (project_dir / ".envrc").read_text()
+    assert text.count('eval "$(devport env alpha)"') == 1
+    assert "already wired" in capsys.readouterr().out
+
+
+def test_init_appends_to_existing_envrc(clean_registry, tmp_path, monkeypatch):
+    project_dir = tmp_path / "alpha"
+    project_dir.mkdir()
+    (project_dir / ".envrc").write_text("export FOO=bar\n")
+    monkeypatch.chdir(project_dir)
+    monkeypatch.setattr(cli.shutil, "which", lambda _: None)
+    cli.main(["init"])
+    text = (project_dir / ".envrc").read_text()
+    assert "export FOO=bar" in text
+    assert 'eval "$(devport env alpha)"' in text
+
+
+def test_init_warns_if_project_not_in_registry(clean_registry, tmp_path, capsys, monkeypatch):
+    project_dir = tmp_path / "newproj"
+    project_dir.mkdir()
+    monkeypatch.chdir(project_dir)
+    monkeypatch.setattr(cli.shutil, "which", lambda _: None)
+    cli.main(["init"])
+    out = capsys.readouterr().out
+    assert "not in registry" in out
+    assert "devport add newproj web" in out
+    # .envrc still gets written
+    assert (project_dir / ".envrc").exists()
+
+
+def test_init_rejects_invalid_name(clean_registry, tmp_path, monkeypatch):
+    project_dir = tmp_path / "weird name"  # space — invalid
+    project_dir.mkdir()
+    monkeypatch.chdir(project_dir)
+    with pytest.raises(SystemExit) as exc:
+        cli.main(["init"])
+    assert "not a valid project name" in str(exc.value)
+
+
 def test_adopt_finds_hardcoded_ports(tmp_path, capsys, monkeypatch):
     monkeypatch.setenv("DEVPORTS_FILE", str(tmp_path / "noop.toml"))
     project = tmp_path / "myapp"
