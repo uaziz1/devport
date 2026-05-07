@@ -17,6 +17,10 @@ echo 'eval "$(direnv hook zsh)"' >> ~/.zshrc
 ```bash
 cd ~/Dev/my-app
 
+# allocate ports for this project (auto-picks a free 10-block)
+devport add my-app web
+devport add my-app api
+
 cat > .envrc <<'EOF'
 eval "$(devport env my-app)"
 EOF
@@ -52,13 +56,10 @@ export default { server: { port: Number(process.env.WEB_PORT) || 3000 } }
 
 ## Adding services to a project
 
-When the project gains a new service, add a name to its block in `~/.config/dev-ports.toml`:
+When the project gains a new service, add it from the CLI:
 
-```toml
-[my-app]
-web    = 3010
-api    = 3011
-worker = 3012   # new
+```bash
+devport add my-app worker      # auto-slots into the project's 10-block
 ```
 
-Run `direnv reload` (or just `cd` in/out). `WORKER_PORT` is now exported.
+Run `direnv reload` (or `cd` in/out). `WORKER_PORT` is now exported.

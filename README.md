@@ -1,6 +1,21 @@
 # devport
 
-A single source of truth for local dev ports. Stop the 3000/3001 turf war.
+*A single source of truth for local dev ports.*
+
+## The problem
+
+When you're working on five projects at the same time, they all want port 3000. Or 4000. Or 9000. Start one, the next one fails to boot. Change a port to unblock yourself, forget you changed it, and now half your configs are out of sync. A week later you've lost count of which app lives where, and `lsof` tells you *something* is bound on 3002 but not *what* or *why*.
+
+It's a mess.
+
+## What devport does
+
+devport gives you a **register** and an **audit**.
+
+- **One file** (`~/.config/dev-ports.toml`) lists which project owns which port. Hand-written, source-controlled in your dotfiles, easy to read.
+- **One command** (`devport doctor`) checks the register for collisions, shows you which registered ports are currently bound, and flags squatters: anything listening in your dev-port range that *isn't* in the register.
+
+Your projects stop competing for the same ports. They stop colliding. You stop losing count.
 
 ```
 $ devport doctor
@@ -14,7 +29,7 @@ $ devport doctor
     3002  ← node(35645)
 ```
 
-If you've ever had three projects fight over `localhost:3000`, this is for you.
+That last block is the magic moment: you finally know what `node(35645)` on 3002 actually is. Kill it, register it, or move it. Mess cleaned up.
 
 ## How it works (in three sentences)
 
@@ -27,37 +42,70 @@ No daemon. No magic. Just a registry and a thin CLI.
 ## Install
 
 ```bash
-pipx install devport
-# or
-pip install --user devport
+curl -fsSL https://raw.githubusercontent.com/uaziz1/devport/main/install.sh | bash
 ```
 
-Requires Python 3.11+. macOS and Linux. Optional: [direnv](https://direnv.net) for the cleanest workflow.
+That's it. The installer:
+
+1. Checks Python 3.11+
+2. Installs the `devport` CLI (via `pipx` if you have it, otherwise `pip --user`)
+3. Seeds an empty registry at `~/.config/dev-ports.toml`
+4. Prints next steps
+
+Idempotent. Safe to re-run. macOS and Linux.
+
+<details>
+<summary>Manual install</summary>
+
+```bash
+pipx install devport          # or: pip install --user devport
+```
+
+Then create the registry yourself:
+
+```bash
+mkdir -p ~/.config
+touch ~/.config/dev-ports.toml
+```
+
+</details>
 
 ## Quickstart
 
+After the installer runs, add ports straight from the CLI — no editor needed:
+
 ```bash
-# 1. Create the registry
-mkdir -p ~/.config
-cat > ~/.config/dev-ports.toml <<'EOF'
-[my-app]
-web = 3010
-api = 3011
-EOF
+devport add my-app web        # → 3010   (auto-allocates a free block)
+devport add my-app api        # → 3011   (next slot in the same block)
+devport add my-app worker 4000   # → 4000   (explicit port)
+```
 
-# 2. Resolve a port
-devport my-app web        # → 3010
+Read, audit, change, and remove:
 
-# 3. Wire a project (with direnv)
+```bash
+devport my-app web                    # → 3010
+devport list my-app                   # show the project's ports
+devport doctor                        # audit collisions + currently-bound
+devport rename my-app web frontend    # web → frontend (port number stays)
+devport rm my-app worker              # remove one port
+devport rm my-app                     # remove the whole project
+```
+
+`add`, `rename`, and `rm` mutate the TOML surgically — comments, blank lines, and inline `# notes` are preserved. Safe for both humans and AI agents to drive.
+
+For per-project wiring (so `package.json`, `docker-compose.yml`, etc. read from the registry), the cleanest path is **[direnv](docs/direnv.md)**:
+
+```bash
 cd ~/Dev/my-app
 echo 'eval "$(devport env my-app)"' > .envrc
 direnv allow
-echo $WEB_PORT            # → 3010
 ```
 
-Now in `package.json`: `"dev": "vite --port $WEB_PORT"`. Done.
+Now `$WEB_PORT` and `$API_PORT` are exported automatically whenever you `cd` in. Replace `3000` literals with `$WEB_PORT` in your code and you're done.
 
 ## Commands
+
+**Read:**
 
 | Command                       | What it does |
 |-------------------------------|--------------|
@@ -66,7 +114,20 @@ Now in `package.json`: `"dev": "vite --port $WEB_PORT"`. Done.
 | `devport env <project>`       | Emit shell `export` lines (use with direnv or `eval`) |
 | `devport check <port>`        | Reverse lookup: who owns this port (registry + live)? |
 | `devport free`                | Suggest the next unused 10-port block |
-| `devport doctor`              | Audit collisions, currently-bound registered ports, and squatters in the dev range |
+
+**Write** (surgical, comment-preserving):
+
+| Command                                      | What it does |
+|----------------------------------------------|--------------|
+| `devport add <project> <name> [port]`        | Add a port. Auto-allocates if no port given. Prints the port. |
+| `devport rm <project> [name]`                | Remove a port (or the whole project if no name) |
+| `devport rename <project> <old> <new>`       | Rename a port within a project |
+
+**Audit:**
+
+| Command                       | What it does |
+|-------------------------------|--------------|
+| `devport doctor`              | Collisions + currently-bound registered ports + squatters in the dev range |
 | `devport adopt <dir>`         | Scan a project for hardcoded local ports |
 
 ## The registry

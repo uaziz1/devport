@@ -21,10 +21,20 @@ scanning /Users/me/Dev/my-app
 3 hit(s) across 3 unique port(s): [3000, 3001, 4000]
 
 next steps:
-  1. add a block to ~/.config/dev-ports.toml (try: devport free)
+  1. devport add <project> web   # registers a port (auto-allocates)
   2. drop in a .envrc with: eval "$(devport env <project>)"
   3. replace the literals above with $WEB_PORT / $API_PORT / etc.
 ```
+
+Concretely:
+
+```bash
+devport add my-app web      # → 3010
+devport add my-app api      # → 3011
+devport add my-app worker   # → 3012
+```
+
+Then drop in `.envrc`, run `direnv allow`, and replace the literals.
 
 ## What it scans
 

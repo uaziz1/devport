@@ -61,6 +61,149 @@ def listening_ports() -> dict[int, str]:
     return bound
 
 
+# --- file mutation helpers (line-level, comment-preserving) -------------------
+
+def _read_lines(path: Path) -> list[str]:
+    return path.read_text().splitlines(keepends=True) if path.exists() else []
+
+
+def _write_lines(path: Path, lines: list[str]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("".join(lines))
+
+
+def _project_range(lines: list[str], project: str) -> tuple[int, int] | None:
+    """Return [header_idx, end_exclusive) line range for a project block, or None."""
+    header = f"[{project}]"
+    start = -1
+    for i, line in enumerate(lines):
+        s = line.strip()
+        if s == header:
+            start = i
+        elif start >= 0 and s.startswith("[") and s.endswith("]"):
+            return (start, i)
+    if start >= 0:
+        return (start, len(lines))
+    return None
+
+
+def _find_port_line(lines: list[str], project: str, name: str) -> int | None:
+    rng = _project_range(lines, project)
+    if not rng:
+        return None
+    pat = re.compile(rf"^\s*{re.escape(name)}\s*=")
+    for i in range(rng[0] + 1, rng[1]):
+        if pat.match(lines[i]):
+            return i
+    return None
+
+
+def _allocate_port(data: dict[str, dict[str, int]], project: str) -> int:
+    """Pick the next free port: in-block if project exists, else new 10-block."""
+    used = {p for ports in data.values() for p in ports.values()}
+    if project in data and data[project]:
+        block_start = (min(data[project].values()) // BLOCK_SIZE) * BLOCK_SIZE
+        for cand in range(block_start, block_start + BLOCK_SIZE):
+            if cand not in used:
+                return cand
+        sys.exit(
+            f"devport: '{project}' block {block_start}-{block_start + BLOCK_SIZE - 1} is full; "
+            "specify a port explicitly"
+        )
+    for start in range(DEV_PORT_RANGE.start, DEV_PORT_RANGE.stop, BLOCK_SIZE):
+        if not set(range(start, start + BLOCK_SIZE)) & used:
+            return start
+    sys.exit("devport: no free 10-port block in 3000-3099")
+
+
+def cmd_add(project: str, name: str, port_str: str | None) -> None:
+    data: dict[str, dict[str, int]] = {}
+    path = registry_path()
+    if path.exists():
+        with path.open("rb") as f:
+            data = tomllib.load(f)
+
+    if project in data and name in data[project]:
+        sys.exit(f"devport: {project}.{name} already exists ({data[project][name]})")
+
+    if port_str is None:
+        port = _allocate_port(data, project)
+    else:
+        try:
+            port = int(port_str)
+        except ValueError:
+            sys.exit(f"devport: '{port_str}' is not a port number")
+        for proj, ports in data.items():
+            for n, p in ports.items():
+                if p == port:
+                    sys.exit(f"devport: port {port} already in use by {proj}.{n}")
+
+    lines = _read_lines(path)
+    rng = _project_range(lines, project)
+    new_line = f"{name} = {port}\n"
+    if rng:
+        insert_at = rng[1]
+        while insert_at > rng[0] + 1 and lines[insert_at - 1].strip() == "":
+            insert_at -= 1
+        lines.insert(insert_at, new_line)
+    else:
+        if lines and not lines[-1].endswith("\n"):
+            lines[-1] += "\n"
+        if lines and lines[-1].strip() != "":
+            lines.append("\n")
+        lines.append(f"[{project}]\n")
+        lines.append(new_line)
+    _write_lines(path, lines)
+    print(port)
+
+
+def cmd_rm(project: str, name: str | None) -> None:
+    path = registry_path()
+    lines = _read_lines(path)
+    rng = _project_range(lines, project)
+    if not rng:
+        sys.exit(f"devport: no project '{project}'")
+
+    if name is None:
+        end = rng[1]
+        if end < len(lines) and lines[end].strip() == "":
+            end += 1
+        del lines[rng[0]:end]
+        _write_lines(path, lines)
+        print(f"removed project: {project}")
+        return
+
+    idx = _find_port_line(lines, project, name)
+    if idx is None:
+        sys.exit(f"devport: no port '{name}' in project '{project}'")
+    del lines[idx]
+    _write_lines(path, lines)
+    print(f"removed: {project}.{name}")
+
+
+def cmd_rename(project: str, old: str, new: str) -> None:
+    data = load()
+    if project not in data:
+        sys.exit(f"devport: no project '{project}'")
+    if old not in data[project]:
+        sys.exit(f"devport: no port '{old}' in project '{project}'")
+    if new == old:
+        sys.exit("devport: old and new names are the same")
+    if new in data[project]:
+        sys.exit(f"devport: '{new}' already exists in project '{project}'")
+
+    path = registry_path()
+    lines = _read_lines(path)
+    idx = _find_port_line(lines, project, old)
+    if idx is None:
+        sys.exit("devport: internal error locating port line")
+    lines[idx] = re.sub(
+        rf"^(\s*){re.escape(old)}(\s*=)", rf"\g<1>{new}\g<2>", lines[idx]
+    )
+    _write_lines(path, lines)
+    print(f"renamed: {project}.{old} -> {project}.{new}")
+
+
 def cmd_get(project: str, name: str) -> None:
     data = load()
     if project not in data:
@@ -237,7 +380,7 @@ def cmd_adopt(target: str) -> None:
 
     print(f"\n{total} hit(s) across {len(found_ports)} unique port(s): {sorted(found_ports)}")
     print("\nnext steps:")
-    print("  1. add a block to ~/.config/dev-ports.toml (try: devport free)")
+    print("  1. devport add <project> web   # registers a port (auto-allocates)")
     print("  2. drop in a .envrc with: eval \"$(devport env <project>)\"")
     print("  3. replace the literals above with $WEB_PORT / $API_PORT / etc.")
 
@@ -245,14 +388,23 @@ def cmd_adopt(target: str) -> None:
 USAGE = """\
 usage: devport <command> [args]
 
-  devport <project> <name>      resolve a port (e.g. devport cadrano web)
-  devport list [project]        show registry
-  devport env <project>         emit shell exports (use with direnv or `eval $(...)`)
-  devport check <port>          reverse lookup: who owns this port
-  devport free                  suggest next unused 10-port block
-  devport doctor                audit collisions + currently-bound ports
-  devport adopt <dir>           scan a project for hardcoded ports
-  devport --version             print version
+read:
+  devport <project> <name>          resolve a port (e.g. devport my-app web)
+  devport list [project]            show registry
+  devport env <project>             emit shell exports (use with direnv or `eval`)
+  devport check <port>              reverse lookup: who owns this port
+  devport free                      suggest next unused 10-port block
+
+write:
+  devport add <project> <name> [port]   add a port (auto-allocates if no port given)
+  devport rm <project> [name]           remove a port (or whole project if no name)
+  devport rename <project> <old> <new>  rename a port within a project
+
+audit:
+  devport doctor                    collisions + currently-bound ports
+  devport adopt <dir>               scan a project for hardcoded ports
+
+  devport --version                 print version
 
 registry: ~/.config/dev-ports.toml (override with $DEVPORTS_FILE)
 """
@@ -287,6 +439,18 @@ def main(argv: list[str] | None = None) -> None:
         if len(args) != 2:
             sys.exit("usage: devport adopt <dir>")
         cmd_adopt(args[1])
+    elif cmd == "add":
+        if len(args) not in (3, 4):
+            sys.exit("usage: devport add <project> <name> [port]")
+        cmd_add(args[1], args[2], args[3] if len(args) == 4 else None)
+    elif cmd == "rm":
+        if len(args) not in (2, 3):
+            sys.exit("usage: devport rm <project> [name]")
+        cmd_rm(args[1], args[2] if len(args) == 3 else None)
+    elif cmd == "rename":
+        if len(args) != 4:
+            sys.exit("usage: devport rename <project> <old> <new>")
+        cmd_rename(args[1], args[2], args[3])
     elif len(args) == 2:
         cmd_get(args[0], args[1])
     else:

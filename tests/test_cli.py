@@ -101,6 +101,101 @@ def test_version(capsys):
     assert capsys.readouterr().out.strip() == "0.1.0"
 
 
+def test_add_explicit_port(clean_registry, capsys):
+    cli.main(["add", "alpha", "ws", "3012"])
+    assert capsys.readouterr().out.strip() == "3012"
+    assert "ws = 3012" in clean_registry.read_text()
+
+
+def test_add_auto_allocates_in_existing_block(clean_registry, capsys):
+    # alpha has 3010 and 3011; next free in its 3010-3019 block is 3012
+    cli.main(["add", "alpha", "ws"])
+    assert capsys.readouterr().out.strip() == "3012"
+
+
+def test_add_auto_allocates_new_block_for_new_project(clean_registry, capsys):
+    # alpha (3010-3011) and beta (3020) used; first free 10-block is 3000-3009
+    cli.main(["add", "newproj", "web"])
+    assert capsys.readouterr().out.strip() == "3000"
+    assert "[newproj]" in clean_registry.read_text()
+
+
+def test_add_rejects_collision(clean_registry):
+    with pytest.raises(SystemExit) as exc:
+        cli.main(["add", "alpha", "newname", "3020"])
+    assert "already in use by beta.web" in str(exc.value)
+
+
+def test_add_rejects_duplicate_name(clean_registry):
+    with pytest.raises(SystemExit) as exc:
+        cli.main(["add", "alpha", "web"])
+    assert "alpha.web already exists" in str(exc.value)
+
+
+def test_add_creates_registry_if_missing(tmp_path, monkeypatch, capsys):
+    target = tmp_path / "subdir" / "ports.toml"
+    monkeypatch.setenv("DEVPORTS_FILE", str(target))
+    cli.main(["add", "fresh", "web", "3010"])
+    assert capsys.readouterr().out.strip() == "3010"
+    text = target.read_text()
+    assert "[fresh]" in text and "web = 3010" in text
+
+
+def test_add_preserves_comments(tmp_path, monkeypatch, capsys):
+    p = tmp_path / "ports.toml"
+    p.write_text("# my custom comment\n\n[alpha]\nweb = 3010  # primary\n")
+    monkeypatch.setenv("DEVPORTS_FILE", str(p))
+    cli.main(["add", "alpha", "api"])
+    text = p.read_text()
+    assert "# my custom comment" in text
+    assert "# primary" in text
+    assert "api = 3011" in text
+
+
+def test_rm_port(clean_registry, capsys):
+    cli.main(["rm", "alpha", "api"])
+    assert "removed: alpha.api" in capsys.readouterr().out
+    text = clean_registry.read_text()
+    assert "api = 3011" not in text
+    assert "web = 3010" in text  # other ports preserved
+
+
+def test_rm_whole_project(clean_registry, capsys):
+    cli.main(["rm", "beta"])
+    assert "removed project: beta" in capsys.readouterr().out
+    text = clean_registry.read_text()
+    assert "[beta]" not in text
+    assert "[alpha]" in text  # other projects preserved
+
+
+def test_rm_unknown_project(clean_registry):
+    with pytest.raises(SystemExit) as exc:
+        cli.main(["rm", "nope"])
+    assert "no project 'nope'" in str(exc.value)
+
+
+def test_rename_port(clean_registry, capsys):
+    cli.main(["rename", "alpha", "web", "frontend"])
+    assert "alpha.web -> alpha.frontend" in capsys.readouterr().out
+    text = clean_registry.read_text()
+    assert "frontend = 3010" in text
+    assert "web = 3010" not in text
+
+
+def test_rename_preserves_inline_comment(tmp_path, monkeypatch, capsys):
+    p = tmp_path / "ports.toml"
+    p.write_text("[alpha]\nweb = 3010  # primary frontend\n")
+    monkeypatch.setenv("DEVPORTS_FILE", str(p))
+    cli.main(["rename", "alpha", "web", "frontend"])
+    assert "# primary frontend" in p.read_text()
+
+
+def test_rename_rejects_existing_name(clean_registry):
+    with pytest.raises(SystemExit) as exc:
+        cli.main(["rename", "alpha", "web", "api"])
+    assert "already exists" in str(exc.value)
+
+
 def test_adopt_finds_hardcoded_ports(tmp_path, capsys, monkeypatch):
     monkeypatch.setenv("DEVPORTS_FILE", str(tmp_path / "noop.toml"))
     project = tmp_path / "myapp"
