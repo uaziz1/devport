@@ -130,9 +130,35 @@ devport rm my-app                     # remove a whole project
 
 ### Migrating an existing project
 
+`devport init` does this for you. When run in a project that already has hardcoded ports (`localhost:3000`, `--port 4000`, etc.), it:
+
+1. **Scans** the directory for hardcoded ports
+2. **Groups** them by port number, suggests names (`web`, `api`, `ws`, `worker`, ...)
+3. **Detects collisions** with other projects in your registry, and re-allocates affected ports
+4. **Shows the plan** and asks for confirmation
+5. **Rewrites** safe patterns in source files (`localhost:NNNN`, `--port NNNN`)
+
 ```bash
-devport adopt ~/Dev/my-app            # find hardcoded ports
+cd ~/Dev/my-existing-app
+devport init                  # interactive plan + confirmation
+devport init --yes            # skip confirmation (good for AI agents)
+devport init --dry-run        # show plan, change nothing
+devport init --no-adopt       # force bare init even if hits exist
 ```
+
+For a read-only scan with no registry changes, the older `adopt` command is still around:
+
+```bash
+devport adopt ~/Dev/my-app    # report-only scan
+```
+
+What `init` rewrites automatically:
+- `localhost:NNNN` and `127.0.0.1:NNNN` → `localhost:${VAR}` (works in any string)
+- `--port NNNN` and `--port=NNNN` → `--port ${VAR}` (works in npm scripts, Makefiles, shell)
+
+What it leaves alone (too risky to auto-rewrite):
+- YAML/JSON property values like `port: NNNN` or `"port": NNNN`
+- `.env` assignments like `PORT=NNNN` (replace by hand if you want them dynamic)
 
 All write operations are surgical (line-level), so comments, blank lines, and inline `# notes` in the registry survive.
 

@@ -394,6 +394,116 @@ def test_init_rejects_invalid_name(clean_registry, tmp_path, monkeypatch):
     assert "not a valid project name" in str(exc.value)
 
 
+def test_init_adopt_flow_with_yes_rewrites_files(clean_registry, tmp_path, capsys, monkeypatch):
+    project_dir = tmp_path / "myapp"
+    project_dir.mkdir()
+    (project_dir / "package.json").write_text(
+        '{"scripts": {"dev": "vite --port 3000"}}\n'
+    )
+    (project_dir / "docker-compose.yml").write_text(
+        'services:\n  web:\n    environment:\n      - URL=http://localhost:3000/api\n'
+    )
+    monkeypatch.chdir(project_dir)
+    monkeypatch.setattr(cli.shutil, "which", lambda _: None)
+    cli.main(["init", "--yes"])
+    out = capsys.readouterr().out
+    # Plan was printed
+    assert "Detected" in out
+    assert "myapp.web = 3000" in out
+    # Files rewritten
+    assert "rewrote 2 occurrence(s)" in out
+    pkg = (project_dir / "package.json").read_text()
+    compose = (project_dir / "docker-compose.yml").read_text()
+    assert "--port ${WEB_PORT}" in pkg
+    assert "localhost:${WEB_PORT}" in compose
+
+
+def test_init_adopt_dry_run_makes_no_changes(clean_registry, tmp_path, capsys, monkeypatch):
+    project_dir = tmp_path / "myapp"
+    project_dir.mkdir()
+    (project_dir / "package.json").write_text(
+        '{"scripts": {"dev": "vite --port 3000"}}\n'
+    )
+    monkeypatch.chdir(project_dir)
+    monkeypatch.setattr(cli.shutil, "which", lambda _: None)
+    cli.main(["init", "--dry-run"])
+    out = capsys.readouterr().out
+    assert "dry-run" in out
+    # File untouched
+    assert "--port 3000" in (project_dir / "package.json").read_text()
+    # Registry untouched
+    assert "[myapp]" not in clean_registry.read_text()
+
+
+def test_init_adopt_reallocates_on_collision(clean_registry, tmp_path, capsys, monkeypatch):
+    # alpha.web is on 3010 in the fixture. Make myapp use 3010 → should re-allocate.
+    project_dir = tmp_path / "myapp"
+    project_dir.mkdir()
+    (project_dir / "package.json").write_text(
+        '{"scripts": {"dev": "vite --port 3010"}}\n'
+    )
+    monkeypatch.chdir(project_dir)
+    monkeypatch.setattr(cli.shutil, "which", lambda _: None)
+    cli.main(["init", "--yes"])
+    out = capsys.readouterr().out
+    assert "collides with alpha.web" in out
+    assert "re-allocated" in out
+    # Registry has myapp with a port that ISN'T 3010 (since 3010 was alpha.web)
+    text = clean_registry.read_text()
+    assert "[myapp]" in text
+    # Parse out myapp's web port specifically
+    in_myapp = False
+    myapp_ports: list[int] = []
+    for line in text.splitlines():
+        s = line.strip()
+        if s == "[myapp]":
+            in_myapp = True
+            continue
+        if s.startswith("[") and s.endswith("]"):
+            in_myapp = False
+            continue
+        if in_myapp and "=" in s:
+            myapp_ports.append(int(s.split("=")[1].strip()))
+    assert myapp_ports
+    assert 3010 not in myapp_ports  # didn't claim alpha's port
+    # File now uses ${WEB_PORT}
+    pkg = (project_dir / "package.json").read_text()
+    assert "--port ${WEB_PORT}" in pkg
+
+
+def test_init_no_adopt_flag_skips_scan(clean_registry, tmp_path, capsys, monkeypatch):
+    project_dir = tmp_path / "myapp"
+    project_dir.mkdir()
+    (project_dir / "package.json").write_text(
+        '{"scripts": {"dev": "vite --port 3000"}}\n'
+    )
+    monkeypatch.chdir(project_dir)
+    monkeypatch.setattr(cli.shutil, "which", lambda _: None)
+    cli.main(["init", "--no-adopt"])
+    out = capsys.readouterr().out
+    # Bare init: no detection, no rewrite, just adds web port
+    assert "Detected" not in out
+    assert "added myapp.web" in out
+    # File untouched
+    assert "--port 3000" in (project_dir / "package.json").read_text()
+
+
+def test_init_adopt_prompt_no_aborts(clean_registry, tmp_path, capsys, monkeypatch):
+    project_dir = tmp_path / "myapp"
+    project_dir.mkdir()
+    (project_dir / "package.json").write_text(
+        '{"scripts": {"dev": "vite --port 3000"}}\n'
+    )
+    monkeypatch.chdir(project_dir)
+    monkeypatch.setattr(cli.shutil, "which", lambda _: None)
+    monkeypatch.setattr("builtins.input", lambda _prompt: "n")
+    with pytest.raises(SystemExit) as exc:
+        cli.main(["init"])
+    assert exc.value.code == 1
+    # File untouched
+    assert "--port 3000" in (project_dir / "package.json").read_text()
+
+
 def test_adopt_finds_hardcoded_ports(tmp_path, capsys, monkeypatch):
     monkeypatch.setenv("DEVPORTS_FILE", str(tmp_path / "noop.toml"))
     project = tmp_path / "myapp"

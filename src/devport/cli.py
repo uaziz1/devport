@@ -278,8 +278,170 @@ def cmd_rename(project: str, old: str, new: str) -> None:
     print(f"renamed: {project}.{old} -> {project}.{new}")
 
 
-def cmd_init(project: str | None) -> None:
-    """One-shot per-project setup: register the project, write .envrc, direnv allow."""
+DEFAULT_PORT_NAMES = ["web", "api", "ws", "worker", "db", "admin", "queue", "cache"]
+
+# Patterns we're confident enough to auto-rewrite (URLs + CLI flags work in any
+# string context that gets shell-expanded).
+REWRITE_PATTERNS = [
+    re.compile(r"(localhost|127\.0\.0\.1|0\.0\.0\.0):(\d{4,5})\b"),
+    re.compile(r"(--port[ =])(\d{4,5})\b"),
+]
+
+
+def _propose_name_for_index(index: int) -> str:
+    if index < len(DEFAULT_PORT_NAMES):
+        return DEFAULT_PORT_NAMES[index]
+    return f"svc{index - len(DEFAULT_PORT_NAMES) + 1}"
+
+
+def _scan_project(root: Path) -> list[tuple[Path, int, int, str]]:
+    """Return [(file, line_no, port, line_text)] for all hardcoded port hits."""
+    hits: list[tuple[Path, int, int, str]] = []
+    for path in root.rglob("*"):
+        if not path.is_file():
+            continue
+        if any(part in ADOPT_SKIP_DIRS for part in path.relative_to(root).parts):
+            continue
+        if not any(path.match(g) for g in ADOPT_GLOBS):
+            continue
+        for line_no, port, snippet in _scan_file(path):
+            hits.append((path, line_no, port, snippet))
+    return hits
+
+
+def _build_init_plan(
+    project: str, hits: list[tuple[Path, int, int, str]], data: dict[str, dict[str, int]]
+) -> list[dict]:
+    """Group hits by port, propose names, resolve collisions. Returns plan items."""
+    by_port: dict[int, list[tuple[Path, int, str]]] = {}
+    for path, line_no, port, snippet in hits:
+        by_port.setdefault(port, []).append((path, line_no, snippet))
+
+    used = {p for ports in data.values() for p in ports.values()}
+    project_ports = data.get(project, {})
+
+    plan: list[dict] = []
+    for idx, port in enumerate(sorted(by_port.keys())):
+        name = _propose_name_for_index(idx)
+        # Avoid name collisions inside the project itself.
+        existing_names = {item["name"] for item in plan} | set(project_ports.keys())
+        suffix = 1
+        base = name
+        while name in existing_names:
+            suffix += 1
+            name = f"{base}{suffix}"
+
+        # Re-allocate if the port is in use by ANOTHER project.
+        owner = next(
+            (
+                f"{p}.{n}"
+                for p, ports in data.items()
+                for n, v in ports.items()
+                if v == port and p != project
+            ),
+            None,
+        )
+        if owner:
+            # Find the next free port in this project's block (or a new block).
+            target = _allocate_port({**data, project: project_ports}, project)
+            action = "REALLOCATE"
+        else:
+            target = port
+            action = "REGISTER"
+        used.add(target)
+
+        plan.append({
+            "name": name, "original": port, "target": target,
+            "action": action, "owner": owner, "hits": by_port[port],
+        })
+    return plan
+
+
+def _print_plan(project: str, plan: list[dict]) -> None:
+    print(f"\nDetected {sum(len(p['hits']) for p in plan)} hardcoded port(s) "
+          f"across {len({h[0] for p in plan for h in p['hits']})} file(s):\n")
+    for item in plan:
+        var = item["name"].upper().replace("-", "_") + "_PORT"
+        if item["action"] == "REALLOCATE":
+            print(f"  ⚠ port {item['original']} collides with {item['owner']}")
+            print(f"    → register {project}.{item['name']} = {item['target']}  (re-allocated)")
+            print(f"    → rewrite {len(item['hits'])} occurrence(s) to ${var}")
+        else:
+            print(f"  • register {project}.{item['name']} = {item['target']}")
+            print(f"    → rewrite {len(item['hits'])} occurrence(s) to ${var}")
+        for path, line_no, snippet in item["hits"][:3]:
+            print(f"      {path}:{line_no}  {snippet[:70]}")
+        if len(item["hits"]) > 3:
+            print(f"      ... and {len(item['hits']) - 3} more")
+    print()
+
+
+def _rewrite_file(path: Path, replacements: list[tuple[int, str]]) -> int:
+    """For each (port, var_expr) replacement, swap the literal in REWRITE_PATTERNS only.
+    Returns number of substitutions made."""
+    text = path.read_text(errors="replace")
+    count = 0
+    for port, var_expr in replacements:
+        port_str = str(port)
+        for pat in REWRITE_PATTERNS:
+            is_url = pat.pattern.startswith("(localhost")
+
+            def repl(m, _port_str=port_str, _var=var_expr, _is_url=is_url):
+                nonlocal count
+                if m.group(2) != _port_str:
+                    return m.group(0)
+                count += 1
+                if _is_url:
+                    return f"{m.group(1)}:{_var}"
+                return f"{m.group(1)}{_var}"
+
+            text = pat.sub(repl, text)
+    if count:
+        path.write_text(text)
+    return count
+
+
+def _execute_plan(project: str, plan: list[dict]) -> tuple[int, int, list[Path]]:
+    """Add ports to registry, rewrite files. Returns (files, subs, untouched_files)."""
+    for item in plan:
+        _add_port(project, item["name"], item["target"])
+
+    by_file: dict[Path, list[tuple[int, str]]] = {}
+    for item in plan:
+        var = "${" + item["name"].upper().replace("-", "_") + "_PORT}"
+        for path, _line_no, _ in item["hits"]:
+            by_file.setdefault(path, []).append((item["original"], var))
+
+    files_rewritten = 0
+    subs_made = 0
+    untouched: list[Path] = []
+    for path, repls in by_file.items():
+        n = _rewrite_file(path, repls)
+        if n > 0:
+            files_rewritten += 1
+            subs_made += n
+        else:
+            untouched.append(path)
+    return files_rewritten, subs_made, untouched
+
+
+def _confirm(prompt: str) -> bool:
+    try:
+        ans = input(f"{prompt} [Y/n] ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        return False
+    return ans in ("", "y", "yes")
+
+
+def cmd_init(
+    project: str | None,
+    *,
+    yes: bool = False,
+    no_adopt: bool = False,
+    dry_run: bool = False,
+) -> None:
+    """One-shot per-project setup: register the project, write .envrc, direnv allow.
+    With existing hardcoded ports detected, walks an adopt + rewrite flow."""
     cwd = Path.cwd()
     proj = project or cwd.name
     if not re.match(r"^[a-zA-Z0-9._-]+$", proj):
@@ -294,13 +456,37 @@ def cmd_init(project: str | None) -> None:
         with path.open("rb") as f:
             data = tomllib.load(f)
 
-    # New (or empty) project? Seed it with a 'web' port so the .envrc has something to export.
-    if proj not in data or not data[proj]:
-        port = _add_port(proj, "web")
-        print(f"  ✓ added {proj}.web = {port}")
+    # Adopt mode: scan cwd for hardcoded ports.
+    plan: list[dict] = []
+    if not no_adopt:
+        hits = _scan_project(cwd)
+        if hits:
+            plan = _build_init_plan(proj, hits, data)
+
+    if plan:
+        _print_plan(proj, plan)
+        if dry_run:
+            print("(dry-run — no changes made)")
+            return
+        if not yes and not _confirm("Proceed?"):
+            print("aborted.")
+            sys.exit(1)
+        files_rewritten, subs_made, untouched = _execute_plan(proj, plan)
+        print(f"  ✓ added {len(plan)} port(s) to registry")
+        print(f"  ✓ rewrote {subs_made} occurrence(s) across {files_rewritten} file(s)")
+        if untouched:
+            print(f"  ⚠ {len(untouched)} file(s) had hits we didn't auto-rewrite "
+                  f"(non-URL patterns); review manually:")
+            for p in untouched[:10]:
+                print(f"      {p}")
     else:
-        existing = ", ".join(f"{n}={p}" for n, p in data[proj].items())
-        print(f"  ✓ project '{proj}' already in registry ({existing})")
+        # No hits — fall back to the bare init: seed a 'web' port if needed.
+        if proj not in data or not data[proj]:
+            port = _add_port(proj, "web")
+            print(f"  ✓ added {proj}.web = {port}")
+        else:
+            existing = ", ".join(f"{n}={p}" for n, p in data[proj].items())
+            print(f"  ✓ project '{proj}' already in registry ({existing})")
 
     envrc = cwd / ".envrc"
     line = f'eval "$(devport env {proj})"'
@@ -561,7 +747,8 @@ write:
   devport add [<project>] <name> [port]  add a port (auto-allocates if no port)
   devport rm <project> [name]            remove a port (or whole project if no name)
   devport rename <project> <old> <new>   rename a port within a project
-  devport init [project]                 wire current dir (.envrc + direnv allow)
+  devport init [project] [flags]         wire current dir; auto-adopt hardcoded ports
+                                         flags: --yes, --no-adopt, --dry-run
 
 audit:
   devport doctor                    collisions + currently-bound ports
@@ -626,9 +813,22 @@ def main(argv: list[str] | None = None) -> None:
             sys.exit("usage: devport rename <project> <old> <new>")
         cmd_rename(args[1], args[2], args[3])
     elif cmd == "init":
-        if len(args) > 2:
-            sys.exit("usage: devport init [project]")
-        cmd_init(args[1] if len(args) == 2 else None)
+        flags = {"yes": False, "no_adopt": False, "dry_run": False}
+        project_arg: str | None = None
+        for arg in args[1:]:
+            if arg in ("-y", "--yes"):
+                flags["yes"] = True
+            elif arg == "--no-adopt":
+                flags["no_adopt"] = True
+            elif arg == "--dry-run":
+                flags["dry_run"] = True
+            elif arg.startswith("-"):
+                sys.exit(f"devport init: unknown flag '{arg}'")
+            else:
+                if project_arg is not None:
+                    sys.exit("usage: devport init [project] [--yes] [--no-adopt] [--dry-run]")
+                project_arg = arg
+        cmd_init(project_arg, **flags)
     elif len(args) == 2:
         cmd_get(args[0], args[1])
     elif len(args) == 1:
