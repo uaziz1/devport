@@ -83,14 +83,19 @@ That's it. `devport init`:
 2. Allocates a free port and adds it as `web`
 3. Writes `.envrc` with the loader
 4. Runs `direnv allow`
+5. Shows you what got added and what to do next:
 
-In a new shell entering this directory, `$WEB_PORT` is now exported. Replace `3000` literals in your `package.json`, `docker-compose.yml`, etc. with `$WEB_PORT` and you're done.
+```
+[my-app]
+  web  3010   → $WEB_PORT
 
-```bash
-echo $WEB_PORT     # → 3010
+Next:
+  Replace `3000` literals in your code with $WEB_PORT. Examples:
+    package.json:        "dev": "vite --port $WEB_PORT"
+    docker-compose.yml:  ports: ["${WEB_PORT}:3000"]
 ```
 
-That's the entire happy path. Everything below is for when you need more.
+That's the entire happy path. `$WEB_PORT` is exported in any shell entering this directory. Everything below is for when you need more.
 
 ### Adding more ports
 
@@ -114,7 +119,9 @@ devport my-app web
 ### Inspecting and changing
 
 ```bash
-devport list                          # show registry
+devport list                          # show ports for the cwd's project (inferred)
+devport list all                      # show every project
+devport list my-app                   # show one project explicitly
 devport doctor                        # audit collisions + what's bound
 devport rename my-app web frontend    # rename within a project
 devport rm my-app worker              # remove a port
@@ -138,7 +145,7 @@ Requires [direnv](docs/direnv.md) — `init` will tell you if it's missing and h
 | Command                       | What it does |
 |-------------------------------|--------------|
 | `devport <project> <name>`    | Resolve a port. Project optional inside a wired project: `devport web` |
-| `devport list [project]`      | Show the registry (everything, or one project) |
+| `devport list`                | Show ports for the inferred project (cwd). With `all` shows everything. With `<project>` shows one. |
 | `devport env <project>`       | Emit shell `export` lines (use with direnv or `eval`) |
 | `devport check <port>`        | Reverse lookup: who owns this port (registry + live)? |
 | `devport free`                | Suggest the next unused 10-port block |

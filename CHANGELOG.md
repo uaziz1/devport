@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `devport rm <project> [name]` — remove a port, or a whole project block if no name given.
 - `devport rename <project> <old> <new>` — rename a port within a project. Port number unchanged.
 - `devport init [project]` — wire the current directory to a project in one shot: writes `.envrc` (or appends to an existing one), runs `direnv allow`. Defaults to the cwd basename. Idempotent.
+- `devport list` is now project-scoped by default: shows ports for the cwd's inferred project. `devport list all` shows everything. `devport list <project>` is unchanged. Output now includes the env var name each port maps to (e.g., `web  3010  → $WEB_PORT`).
+- `devport init` ends with a summary block: shows the registered ports with their env var names, plus drop-in usage examples for `package.json`, `docker-compose.yml`, and `.env`.
 - Project inference: when run inside a directory whose `.envrc` was set up by `devport init`, the project name is inferred from the `.envrc`. So `devport add api` (no project) and `devport web` (no project) work from inside the project. Walks up parent directories so you can be in any subfolder.
 - Auto-reload: after `devport add`, the relevant `.envrc` is touched so direnv reloads on the next prompt — no manual `direnv reload` or `cd` out and back.
 - All write ops are surgical (line-level), so comments, blank lines, and inline `# notes` survive.

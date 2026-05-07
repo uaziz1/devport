@@ -326,6 +326,19 @@ def cmd_init(project: str | None) -> None:
         print("    install: brew install direnv")
         print("    then add to your shell rc: eval \"$(direnv hook bash)\"")
 
+    # Show the user what they got and how to use it.
+    cmd_list(proj)
+    # Re-read after the potential _add_port above so first_name is current.
+    with path.open("rb") as f:
+        ports = tomllib.load(f).get(proj, {})
+    first_name = next(iter(ports.keys()), "web")
+    var_name = first_name.upper().replace("-", "_") + "_PORT"
+    print()
+    print("Next:")
+    print(f"  Replace `3000` literals in your code with ${var_name}. Examples:")
+    print(f'    package.json:        "dev": "vite --port ${var_name}"')
+    print(f"    docker-compose.yml:  ports: [\"${{{var_name}}}:3000\"]")
+
 
 def cmd_get(project: str, name: str) -> None:
     data = load()
@@ -339,13 +352,30 @@ def cmd_get(project: str, name: str) -> None:
 
 def cmd_list(project: str | None) -> None:
     data = load()
-    targets = [project] if project else list(data.keys())
+
+    if project == "all":
+        targets = list(data.keys())
+    elif project is not None:
+        if project not in data:
+            sys.exit(f"devport: no project '{project}'")
+        targets = [project]
+    else:
+        # No arg: infer from cwd .envrc; fall back to all if not in a project.
+        inferred = _infer_project()
+        targets = [inferred] if inferred and inferred in data else list(data.keys())
+
+    if not targets:
+        print("(empty registry — try: devport init)")
+        return
+
+    name_w = max(
+        (len(n) for p in targets for n in data[p]), default=4
+    )
     for p in targets:
-        if p not in data:
-            sys.exit(f"devport: no project '{p}'")
         print(f"\n[{p}]")
         for name, port in data[p].items():
-            print(f"  {name:<12} {port}")
+            var = name.upper().replace("-", "_") + "_PORT"
+            print(f"  {name:<{name_w}}  {port}   → ${var}")
 
 
 def cmd_env(project: str) -> None:
@@ -520,7 +550,9 @@ When you're inside a project directory (where `.envrc` was set up by
 
 read:
   devport <project> <name>          resolve a port (e.g. devport my-app web)
-  devport list [project]            show registry
+  devport list                      show ports for the inferred project (cwd)
+  devport list <project>            show one project's ports
+  devport list all                  show every project
   devport env <project>             emit shell exports (use with direnv or `eval`)
   devport check <port>              reverse lookup: who owns this port
   devport free                      suggest next unused 10-port block

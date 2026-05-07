@@ -20,13 +20,42 @@ def test_get_unknown_port_name_exits(registry):
     assert "no port 'nope'" in str(exc.value)
 
 
-def test_list_all(registry, capsys):
-    cli.main(["list"])
+def test_list_all(registry, capsys, tmp_path, monkeypatch):
+    # Run from a clean dir so inference doesn't engage.
+    monkeypatch.chdir(tmp_path)
+    cli.main(["list", "all"])
     out = capsys.readouterr().out
     assert "[alpha]" in out and "[beta]" in out and "3010" in out
 
 
-def test_list_one_project(registry, capsys):
+def test_list_no_args_falls_back_to_all_when_no_envrc(registry, tmp_path, capsys, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    cli.main(["list"])
+    out = capsys.readouterr().out
+    assert "[alpha]" in out and "[beta]" in out
+
+
+def test_list_no_args_uses_inference(clean_registry, tmp_path, capsys, monkeypatch):
+    project_dir = tmp_path / "alpha"
+    project_dir.mkdir()
+    (project_dir / ".envrc").write_text('eval "$(devport env alpha)"\n')
+    monkeypatch.chdir(project_dir)
+    cli.main(["list"])
+    out = capsys.readouterr().out
+    assert "[alpha]" in out
+    assert "[beta]" not in out  # only the inferred project shown
+
+
+def test_list_shows_env_var_names(registry, tmp_path, capsys, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    cli.main(["list", "beta"])
+    out = capsys.readouterr().out
+    assert "$WEB_PORT" in out
+    assert "$WS_PORT" in out
+
+
+def test_list_one_project(registry, tmp_path, capsys, monkeypatch):
+    monkeypatch.chdir(tmp_path)
     cli.main(["list", "beta"])
     out = capsys.readouterr().out
     assert "[beta]" in out and "[alpha]" not in out
@@ -273,6 +302,25 @@ def test_init_writes_envrc_with_explicit_name(clean_registry, tmp_path, capsys, 
     envrc = project_dir / ".envrc"
     assert envrc.exists()
     assert 'eval "$(devport env alpha)"' in envrc.read_text()
+
+
+def test_init_shows_summary_with_env_var_and_examples(
+    clean_registry, tmp_path, capsys, monkeypatch
+):
+    project_dir = tmp_path / "newapp"
+    project_dir.mkdir()
+    monkeypatch.chdir(project_dir)
+    monkeypatch.setattr(cli.shutil, "which", lambda _: None)
+    cli.main(["init"])
+    out = capsys.readouterr().out
+    # Shows the registry block with env var name
+    assert "[newapp]" in out
+    assert "$WEB_PORT" in out
+    # Shows the next-steps hint
+    assert "Replace `3000`" in out
+    assert "$WEB_PORT" in out
+    assert "package.json" in out
+    assert "docker-compose.yml" in out
 
 
 def test_init_uses_cwd_basename_when_no_arg(clean_registry, tmp_path, monkeypatch):
