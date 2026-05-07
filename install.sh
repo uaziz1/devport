@@ -16,6 +16,7 @@ REPO_URL="https://github.com/uaziz1/devport"
 REGISTRY="${DEVPORTS_FILE:-$HOME/.config/dev-ports.toml}"
 REF="${DEVPORT_REF:-main}"
 USE_PYPI="${DEVPORT_PYPI:-1}"
+SKIP_DIRENV="${DEVPORT_SKIP_DIRENV:-0}"
 
 # --- output helpers -----------------------------------------------------------
 if [[ -t 1 ]]; then
@@ -117,7 +118,73 @@ else
     warn "add this to ~/.bashrc or ~/.zshrc:  export PATH=\"\$HOME/.local/bin:\$PATH\""
 fi
 
-# --- 5. Seed registry ---------------------------------------------------------
+# --- 5. direnv (install + hook) ----------------------------------------------
+install_direnv_macos() {
+    if ! command -v brew >/dev/null 2>&1; then
+        warn "Homebrew not found — install direnv manually: https://direnv.net/docs/installation.html"
+        return 1
+    fi
+    say "  installing direnv via brew (this may take a minute)..."
+    if brew install direnv >/dev/null 2>&1; then
+        ok "direnv installed via brew"
+        return 0
+    fi
+    warn "brew install direnv failed — install manually"
+    return 1
+}
+
+ensure_direnv_hook() {
+    local shell_name="${SHELL##*/}"
+    local rc=""
+    case "$shell_name" in
+        bash) rc="$HOME/.bashrc" ;;
+        zsh)  rc="$HOME/.zshrc" ;;
+        *)
+            warn "unrecognized shell: $shell_name — add this line to your shell rc:"
+            printf "      eval \"\$(direnv hook %s)\"\n" "$shell_name"
+            return 1
+            ;;
+    esac
+
+    local hook_line='eval "$(direnv hook '"$shell_name"')"'
+
+    if [[ -f "$rc" ]] && grep -qF 'direnv hook' "$rc"; then
+        ok "direnv hook already in $rc"
+        return 0
+    fi
+
+    {
+        printf "\n# devport / direnv\n"
+        printf "%s\n" "$hook_line"
+    } >> "$rc"
+    ok "added direnv hook to $rc"
+    HOOK_ADDED=1
+    return 0
+}
+
+HOOK_ADDED=0
+if [[ "$SKIP_DIRENV" == "1" ]]; then
+    warn "skipping direnv setup (DEVPORT_SKIP_DIRENV=1)"
+elif command -v direnv >/dev/null 2>&1; then
+    ok "direnv already installed"
+    ensure_direnv_hook || true
+else
+    case "$(uname -s)" in
+        Darwin)
+            install_direnv_macos && ensure_direnv_hook || true
+            ;;
+        Linux)
+            warn "direnv not installed (auto-install on Linux not supported)"
+            warn "install with your package manager (e.g. apt install direnv) then re-run"
+            warn "  https://direnv.net/docs/installation.html"
+            ;;
+        *)
+            warn "direnv not installed and OS is unsupported for auto-install"
+            ;;
+    esac
+fi
+
+# --- 6. Seed registry --------------------------------------------------------
 if [[ -f "$REGISTRY" ]]; then
     ok "registry already exists at $REGISTRY (left untouched)"
 else
@@ -136,10 +203,19 @@ EOF
     ok "created $REGISTRY"
 fi
 
-# --- 6. Wrap up ---------------------------------------------------------------
+# --- 7. Wrap up --------------------------------------------------------------
 say ""
 hdr "Done."
 say ""
+if [[ "$HOOK_ADDED" == "1" ]]; then
+    rc=""
+    case "${SHELL##*/}" in
+        bash) rc="$HOME/.bashrc" ;;
+        zsh)  rc="$HOME/.zshrc" ;;
+    esac
+    say "⚠ Restart your shell (or run: source $rc) to activate the direnv hook."
+    say ""
+fi
 say "Get started in any project — one command:"
 say ""
 say "    cd ~/Dev/<project> && devport init"
@@ -149,13 +225,10 @@ say "  runs direnv allow. Then \$WEB_PORT is exported in that directory."
 say ""
 say "More commands once you need them:"
 say ""
-say "    devport add <project> api           # add another port"
-say "    devport list                        # show registry"
+say "    devport add api                     # add another port (in cwd)"
+say "    devport list                        # show ports for the cwd project"
 say "    devport doctor                      # collisions + what's bound"
 say "    devport adopt ~/Dev/<project>       # find hardcoded ports to migrate"
 say ""
 say "Registry: $REGISTRY"
 say "Docs:     $REPO_URL"
-say ""
-say "Required: direnv (devport init will warn you if it's missing):"
-say "  brew install direnv && eval \"\$(direnv hook bash)\" >> ~/.bashrc"
