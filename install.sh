@@ -81,7 +81,8 @@ if [[ "$INSTALLER" == "pipx" ]]; then
     pipx install --force "$TARGET" >/dev/null 2>&1 || die "pipx install ($SOURCE) failed"
     INSTALLED_VIA="pipx"
 else
-    pip3 install --user --quiet --upgrade --force-reinstall "$TARGET" \
+    pip3 install --user --quiet --upgrade --force-reinstall \
+        --no-warn-script-location --disable-pip-version-check "$TARGET" \
         || die "pip install ($SOURCE) failed"
     INSTALLED_VIA="pip --user"
 fi
