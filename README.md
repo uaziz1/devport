@@ -94,12 +94,22 @@ That's the entire happy path. Everything below is for when you need more.
 
 ### Adding more ports
 
+While you're inside the project directory, devport infers the project from `.envrc` — drop the project name:
+
 ```bash
-devport add my-app api               # → 3011 (next slot in same block)
-devport add my-app worker 4000       # → 4000 (explicit)
+devport add api          # → 3011 (auto-allocated)
+devport add worker 4000  # → 4000 (explicit)
+devport web              # → 3010 (resolve)
 ```
 
-After adding, run `direnv reload` (or `cd` out and back) and `$API_PORT` / `$WORKER_PORT` are exported.
+direnv auto-reloads on the next prompt — `$API_PORT` and `$WORKER_PORT` are immediately exported. No manual `direnv reload`, no `cd` in/out.
+
+For projects you're not currently inside:
+
+```bash
+devport add my-app api
+devport my-app web
+```
 
 ### Inspecting and changing
 
@@ -127,7 +137,7 @@ Requires [direnv](docs/direnv.md) — `init` will tell you if it's missing and h
 
 | Command                       | What it does |
 |-------------------------------|--------------|
-| `devport <project> <name>`    | Resolve a port. Use in scripts: `$(devport my-app web)` |
+| `devport <project> <name>`    | Resolve a port. Project optional inside a wired project: `devport web` |
 | `devport list [project]`      | Show the registry (everything, or one project) |
 | `devport env <project>`       | Emit shell `export` lines (use with direnv or `eval`) |
 | `devport check <port>`        | Reverse lookup: who owns this port (registry + live)? |
@@ -137,7 +147,7 @@ Requires [direnv](docs/direnv.md) — `init` will tell you if it's missing and h
 
 | Command                                      | What it does |
 |----------------------------------------------|--------------|
-| `devport add <project> <name> [port]`        | Add a port. Auto-allocates if no port given. Prints the port. |
+| `devport add [<project>] <name> [port]`      | Add a port. Project inferred from `.envrc` when omitted. Auto-allocates if no port given. |
 | `devport rm <project> [name]`                | Remove a port (or the whole project if no name) |
 | `devport rename <project> <old> <new>`       | Rename a port within a project |
 | `devport init [project]`                     | Wire current dir to a project: write `.envrc` + `direnv allow` |

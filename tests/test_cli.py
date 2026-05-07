@@ -196,6 +196,74 @@ def test_rename_rejects_existing_name(clean_registry):
     assert "already exists" in str(exc.value)
 
 
+def test_add_with_inferred_project(clean_registry, tmp_path, capsys, monkeypatch):
+    project_dir = tmp_path / "alpha"
+    project_dir.mkdir()
+    (project_dir / ".envrc").write_text('eval "$(devport env alpha)"\n')
+    monkeypatch.chdir(project_dir)
+    monkeypatch.setattr(cli.shutil, "which", lambda _: None)
+    cli.main(["add", "ws"])  # no project arg
+    assert capsys.readouterr().out.strip() == "3012"  # next slot in alpha's block
+
+
+def test_add_with_inferred_project_and_explicit_port(clean_registry, tmp_path, capsys, monkeypatch):
+    project_dir = tmp_path / "alpha"
+    project_dir.mkdir()
+    (project_dir / ".envrc").write_text('eval "$(devport env alpha)"\n')
+    monkeypatch.chdir(project_dir)
+    monkeypatch.setattr(cli.shutil, "which", lambda _: None)
+    cli.main(["add", "ws", "5050"])
+    assert capsys.readouterr().out.strip() == "5050"
+
+
+def test_add_walks_up_for_envrc(clean_registry, tmp_path, capsys, monkeypatch):
+    project_dir = tmp_path / "alpha"
+    sub = project_dir / "src" / "components"
+    sub.mkdir(parents=True)
+    (project_dir / ".envrc").write_text('eval "$(devport env alpha)"\n')
+    monkeypatch.chdir(sub)  # deep inside the project
+    monkeypatch.setattr(cli.shutil, "which", lambda _: None)
+    cli.main(["add", "ws"])
+    assert capsys.readouterr().out.strip() == "3012"
+
+
+def test_add_errors_when_no_envrc_to_infer_from(clean_registry, tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(cli.shutil, "which", lambda _: None)
+    with pytest.raises(SystemExit) as exc:
+        cli.main(["add", "ws"])
+    assert "no project inferred" in str(exc.value)
+
+
+def test_bare_get_with_inferred_project(clean_registry, tmp_path, capsys, monkeypatch):
+    project_dir = tmp_path / "alpha"
+    project_dir.mkdir()
+    (project_dir / ".envrc").write_text('eval "$(devport env alpha)"\n')
+    monkeypatch.chdir(project_dir)
+    cli.main(["web"])  # no project arg
+    assert capsys.readouterr().out.strip() == "3010"
+
+
+def test_add_touches_envrc_when_direnv_present(clean_registry, tmp_path, monkeypatch):
+    import time
+
+    project_dir = tmp_path / "alpha"
+    project_dir.mkdir()
+    envrc = project_dir / ".envrc"
+    envrc.write_text('eval "$(devport env alpha)"\n')
+    monkeypatch.chdir(project_dir)
+    monkeypatch.setattr(
+        cli.shutil, "which",
+        lambda exe: "/usr/bin/direnv" if exe == "direnv" else None,
+    )
+
+    before = envrc.stat().st_mtime_ns
+    time.sleep(0.01)
+    cli.main(["add", "ws"])
+    after = envrc.stat().st_mtime_ns
+    assert after > before
+
+
 def test_init_writes_envrc_with_explicit_name(clean_registry, tmp_path, capsys, monkeypatch):
     project_dir = tmp_path / "myproj"
     project_dir.mkdir()

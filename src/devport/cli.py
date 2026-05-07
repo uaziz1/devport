@@ -61,6 +61,63 @@ def listening_ports() -> dict[int, str]:
     return bound
 
 
+# --- envrc inference + direnv auto-reload ------------------------------------
+
+ENVRC_PROJECT_RE = re.compile(r"devport env ([a-zA-Z0-9._-]+)")
+
+
+def _walk_up_for_envrc():
+    """Yield .envrc paths walking from cwd up to home/filesystem root."""
+    home = Path.home()
+    path = Path.cwd()
+    visited: set[Path] = set()
+    while path not in visited:
+        visited.add(path)
+        envrc = path / ".envrc"
+        if envrc.is_file():
+            yield envrc
+        if path == home or path.parent == path:
+            break
+        path = path.parent
+
+
+def _find_envrc_for_project(project: str | None = None) -> tuple[Path, str] | None:
+    """Return (envrc_path, project_name) for the first .envrc that wires devport,
+    optionally matching `project`. None if not found."""
+    for envrc in _walk_up_for_envrc():
+        try:
+            text = envrc.read_text()
+        except OSError:
+            continue
+        m = ENVRC_PROJECT_RE.search(text)
+        if not m:
+            continue
+        name = m.group(1)
+        if project is None or name == project:
+            return (envrc, name)
+    return None
+
+
+def _infer_project() -> str | None:
+    found = _find_envrc_for_project()
+    return found[1] if found else None
+
+
+def _trigger_direnv_reload(project: str) -> bool:
+    """Touch the .envrc that wires this project so direnv reloads on next prompt.
+    Returns True if a relevant .envrc was touched."""
+    if not shutil.which("direnv"):
+        return False
+    found = _find_envrc_for_project(project)
+    if not found:
+        return False
+    try:
+        found[0].touch()
+        return True
+    except OSError:
+        return False
+
+
 # --- file mutation helpers (line-level, comment-preserving) -------------------
 
 def _read_lines(path: Path) -> list[str]:
@@ -154,14 +211,24 @@ def _add_port(project: str, name: str, port: int | None = None) -> int:
     return port
 
 
-def cmd_add(project: str, name: str, port_str: str | None) -> None:
+def cmd_add(project: str | None, name: str, port_str: str | None) -> None:
+    if project is None:
+        project = _infer_project()
+        if project is None:
+            sys.exit(
+                "devport: no project inferred from .envrc; "
+                "use: devport add <project> <name> [port]"
+            )
     port: int | None = None
     if port_str is not None:
         try:
             port = int(port_str)
         except ValueError:
             sys.exit(f"devport: '{port_str}' is not a port number")
-    print(_add_port(project, name, port))
+    p = _add_port(project, name, port)
+    print(p)
+    if _trigger_direnv_reload(project):
+        print("  ↻ direnv will reload on next prompt", file=sys.stderr)
 
 
 def cmd_rm(project: str, name: str | None) -> None:
@@ -444,6 +511,13 @@ def cmd_adopt(target: str) -> None:
 USAGE = """\
 usage: devport <command> [args]
 
+When you're inside a project directory (where `.envrc` was set up by
+`devport init`), the project name is inferred — drop the first argument:
+
+  devport web                       resolve `web` in the inferred project
+  devport add api                   add `api` to the inferred project
+  devport add api 5000              ...with an explicit port
+
 read:
   devport <project> <name>          resolve a port (e.g. devport my-app web)
   devport list [project]            show registry
@@ -452,10 +526,10 @@ read:
   devport free                      suggest next unused 10-port block
 
 write:
-  devport add <project> <name> [port]   add a port (auto-allocates if no port given)
-  devport rm <project> [name]           remove a port (or whole project if no name)
-  devport rename <project> <old> <new>  rename a port within a project
-  devport init [project]                wire current dir to a project (.envrc + direnv allow)
+  devport add [<project>] <name> [port]  add a port (auto-allocates if no port)
+  devport rm <project> [name]            remove a port (or whole project if no name)
+  devport rename <project> <old> <new>   rename a port within a project
+  devport init [project]                 wire current dir (.envrc + direnv allow)
 
 audit:
   devport doctor                    collisions + currently-bound ports
@@ -497,9 +571,20 @@ def main(argv: list[str] | None = None) -> None:
             sys.exit("usage: devport adopt <dir>")
         cmd_adopt(args[1])
     elif cmd == "add":
-        if len(args) not in (3, 4):
-            sys.exit("usage: devport add <project> <name> [port]")
-        cmd_add(args[1], args[2], args[3] if len(args) == 4 else None)
+        rest = args[1:]
+        if len(rest) == 1:
+            cmd_add(None, rest[0], None)
+        elif len(rest) == 2:
+            # `add <name> <port>` (inferred project) if 2nd is digits, else
+            # `add <project> <name>` (auto-port).
+            if rest[1].isdigit():
+                cmd_add(None, rest[0], rest[1])
+            else:
+                cmd_add(rest[0], rest[1], None)
+        elif len(rest) == 3:
+            cmd_add(rest[0], rest[1], rest[2])
+        else:
+            sys.exit("usage: devport add [<project>] <name> [port]")
     elif cmd == "rm":
         if len(args) not in (2, 3):
             sys.exit("usage: devport rm <project> [name]")
@@ -514,6 +599,13 @@ def main(argv: list[str] | None = None) -> None:
         cmd_init(args[1] if len(args) == 2 else None)
     elif len(args) == 2:
         cmd_get(args[0], args[1])
+    elif len(args) == 1:
+        # Bare `devport <name>` — try to resolve in the inferred project.
+        project = _infer_project()
+        if project is None:
+            print(USAGE, file=sys.stderr)
+            sys.exit(2)
+        cmd_get(project, args[0])
     else:
         print(USAGE, file=sys.stderr)
         sys.exit(2)
