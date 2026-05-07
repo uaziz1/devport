@@ -38,16 +38,18 @@ PY_OK=$(python3 -c 'import sys; print(1 if sys.version_info >= (3,11) else 0)')
 [[ "$PY_OK" == "1" ]] || die "Python 3.11+ required (you have $PY_VER)."
 ok "Python $PY_VER"
 
-# --- 2. Install the CLI -------------------------------------------------------
-install_via_pipx() {
-    local target="$1"
-    pipx install --force "$target" >/dev/null 2>&1
-}
-install_via_pip() {
-    local target="$1"
-    pip3 install --user --quiet --upgrade "$target"
-}
+# --- 2. Sideline any legacy standalone script --------------------------------
+LOCAL_BIN="$HOME/.local/bin"
+LEGACY="$LOCAL_BIN/devport"
+if [[ -f "$LEGACY" && ! -L "$LEGACY" ]]; then
+    # A regular file at this path is a hand-written legacy script (the package
+    # ships its binary in the Python user-bin dir; we only put a symlink here).
+    BAK="$LOCAL_BIN/devport.legacy.bak"
+    mv "$LEGACY" "$BAK"
+    warn "moved legacy script $LEGACY → $BAK"
+fi
 
+# --- 3. Install the CLI -------------------------------------------------------
 INSTALLER=""
 if command -v pipx >/dev/null 2>&1; then
     INSTALLER="pipx"
@@ -60,41 +62,61 @@ fi
 GIT_TARGET="git+${REPO_URL}.git@${REF}"
 PYPI_TARGET="devport"
 
-installed=""
-if [[ "$USE_PYPI" == "1" ]]; then
-    if [[ "$INSTALLER" == "pipx" ]] && install_via_pipx "$PYPI_TARGET"; then
-        installed="pipx (PyPI)"
-    elif [[ "$INSTALLER" == "pip" ]] && install_via_pip "$PYPI_TARGET" >/dev/null 2>&1; then
-        installed="pip --user (PyPI)"
-    fi
-fi
-if [[ -z "$installed" ]]; then
-    if [[ "$INSTALLER" == "pipx" ]]; then
-        install_via_pipx "$GIT_TARGET" || die "pipx install from git failed"
-        installed="pipx (git@${REF})"
-    else
-        install_via_pip "$GIT_TARGET" || die "pip install from git failed"
-        installed="pip --user (git@${REF})"
-    fi
-fi
-ok "installed via $installed"
+# Probe PyPI directly via HTTP — pip's exit codes lie about already-installed
+# packages, so we ask the index ourselves.
+pypi_has_devport() {
+    [[ "$USE_PYPI" == "1" ]] || return 1
+    curl -fsI "https://pypi.org/pypi/${PYPI_TARGET}/json" -o /dev/null 2>/dev/null
+}
 
-# --- 3. PATH check ------------------------------------------------------------
-if ! command -v devport >/dev/null 2>&1; then
-    BIN="$HOME/.local/bin"
-    if [[ -x "$BIN/devport" ]]; then
-        warn "$BIN is not on \$PATH"
-        warn "add this to ~/.bashrc or ~/.zshrc:"
-        printf "      export PATH=\"\$HOME/.local/bin:\$PATH\"\n"
-    else
-        warn "devport binary not found on \$PATH after install"
-        warn "you may need to restart your shell or run: hash -r"
-    fi
+if pypi_has_devport; then
+    SOURCE="PyPI"
+    TARGET="$PYPI_TARGET"
 else
-    ok "devport on \$PATH ($(command -v devport))"
+    SOURCE="git@${REF}"
+    TARGET="$GIT_TARGET"
 fi
 
-# --- 4. Seed registry ---------------------------------------------------------
+if [[ "$INSTALLER" == "pipx" ]]; then
+    pipx install --force "$TARGET" >/dev/null 2>&1 || die "pipx install ($SOURCE) failed"
+    INSTALLED_VIA="pipx"
+else
+    pip3 install --user --quiet --upgrade --force-reinstall "$TARGET" \
+        || die "pip install ($SOURCE) failed"
+    INSTALLED_VIA="pip --user"
+fi
+ok "installed via $INSTALLED_VIA ($SOURCE)"
+
+# --- 4. PATH wiring -----------------------------------------------------------
+# pip --user installs the binary into ~/Library/Python/X.Y/bin (or ~/.local/bin
+# on Linux). If that's not on PATH, symlink into ~/.local/bin which usually is.
+mkdir -p "$LOCAL_BIN"
+if ! command -v devport >/dev/null 2>&1; then
+    PKG_BIN=""
+    for cand in \
+        "$HOME/Library/Python/$PY_VER/bin/devport" \
+        "$HOME/.local/lib/python$PY_VER/bin/devport" \
+        "$(python3 -c 'import sysconfig; print(sysconfig.get_path("scripts", "posix_user"))' 2>/dev/null)/devport" \
+    ; do
+        if [[ -n "$cand" && -x "$cand" ]]; then
+            PKG_BIN="$cand"
+            break
+        fi
+    done
+    if [[ -n "$PKG_BIN" ]]; then
+        ln -sf "$PKG_BIN" "$LOCAL_BIN/devport"
+        ok "linked $LOCAL_BIN/devport → $PKG_BIN"
+    fi
+fi
+hash -r 2>/dev/null || true
+if command -v devport >/dev/null 2>&1; then
+    ok "devport on \$PATH ($(command -v devport), v$(devport --version))"
+else
+    warn "devport not on \$PATH yet"
+    warn "add this to ~/.bashrc or ~/.zshrc:  export PATH=\"\$HOME/.local/bin:\$PATH\""
+fi
+
+# --- 5. Seed registry ---------------------------------------------------------
 if [[ -f "$REGISTRY" ]]; then
     ok "registry already exists at $REGISTRY (left untouched)"
 else
@@ -113,7 +135,7 @@ EOF
     ok "created $REGISTRY"
 fi
 
-# --- 5. Wrap up ---------------------------------------------------------------
+# --- 6. Wrap up ---------------------------------------------------------------
 say ""
 hdr "Done."
 say ""
